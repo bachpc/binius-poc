@@ -1,45 +1,94 @@
+from collections.abc import Iterable
 import random
+from types import UnionType
 
 
 class BinaryField:
 
-    def __init__(self, bit_length, multiplicative_generator):
+    def __init__(self, bit_length: int):
         # assert bit_length > 0 and bit_length & (bit_length - 1) == 0
         assert bit_length in {1, 2, 4, 8, 16, 32, 64, 128}
         self.bit_length = bit_length
-        self.MULTIPLICATIVE_GENERATOR = self(multiplicative_generator)
         self.ZERO = self(0)
         self.ONE = self(1)
 
-    def __call__(self, val):
-        return BinaryFieldElement(self, val)
+    def __call__(self, value: "int | BinaryFieldElement") -> "BinaryFieldElement":
+        return BinaryFieldElement(self, value)
 
-    def __hash__(self):
-        return hash(hash(self.bit_length) + 0x1337 * hash(self.MULTIPLICATIVE_GENERATOR.value))
+    def __hash__(self) -> int:
+        return hash(("BinaryField", self.bit_length))
 
-    def __repr__(self):
-        return f'Binary Field of Size 2^{self.bit_length} with generator {self.MULTIPLICATIVE_GENERATOR}'
+    def __eq__(self, other: "BinaryField") -> bool:
+        assert isinstance(other, BinaryField)
+        return self.bit_length == other.bit_length
 
-    def is_extension_of(self, other):
+    def __repr__(self) -> str:
+        return f"Binary Field of Size 2^{self.bit_length}"
+
+    def to_bytes(self) -> bytes:
+        return self.bit_length.to_bytes(2, "little")
+
+    def is_extension_of(self, other: "BinaryField") -> bool:
         assert isinstance(other, BinaryField)
         return self.bit_length % other.bit_length == 0
 
-    def random_element(self):
+    def random_element(self) -> "BinaryFieldElement":
         value = random.getrandbits(self.bit_length)
         return self(value)
 
-    def order(self):
+    def order(self) -> int:
         return (1 << self.bit_length) - 1
 
-    def pack_width(self, subfield):
+    def degree(self, subfield: "BinaryField"):
         assert isinstance(subfield, BinaryField)
         assert self.is_extension_of(subfield)
         return self.bit_length // subfield.bit_length
 
+    def check_element(self, element: "BinaryFieldElement") -> bool:
+        return isinstance(element, BinaryFieldElement) and element.field == self
+
+    def from_unpacked(
+        self, elts: Iterable["BinaryFieldElement"]
+    ) -> "BinaryFieldElement":
+        assert all(isinstance(e, BinaryFieldElement) for e in elts)
+        assert sum(e.bit_length for e in elts) == self.bit_length
+        ret = 0
+        for e in elts:
+            ret = ret << e.bit_length | e.value
+        return BinaryFieldElement(self, ret)
+
+    def cast_slice(
+        self, elts: Iterable["BinaryFieldElement"]
+    ) -> list["BinaryFieldElement"]:
+        assert all(isinstance(e, BinaryFieldElement) for e in elts)
+        assert sum(e.bit_length for e in elts) % self.bit_length == 0
+        x = 0
+        for e in elts:
+            x = x << e.bit_length | e.value
+        ret = []
+        mask = (1 << self.bit_length) - 1
+        width = sum(e.bit_length for e in elts) // self.bit_length
+        for _ in range(width):
+            ret.append(BinaryFieldElement(self, x & mask))
+            x >>= self.bit_length
+        return ret[::-1]
+
+    def __or__(self, other: "BinaryField") -> "BinaryField":
+        assert isinstance(other, BinaryField)
+        if self.is_extension_of(other):
+            return self
+        return other
+
+    def __and__(self, other: "BinaryField") -> "BinaryField":
+        assert isinstance(other, BinaryField)
+        if self.is_extension_of(other):
+            return other
+        return self
+
 
 class BinaryFieldElement:
 
-    def __init__(self, field, value):
+    def __init__(self, field: "BinaryField", value: "int | BinaryFieldElement"):
         assert isinstance(field, BinaryField)
         if isinstance(value, BinaryFieldElement):
             value = value.value
@@ -47,13 +96,14 @@ class BinaryFieldElement:
         self.field = field
         self.value = value
 
-    def __hash__(self):
-        return hash(hash(self.field) + 0x1339 * hash(self.value))
+    def __hash__(self) -> int:
+        return hash(("BinaryFieldElement", self.field, self.value))
 
-    def __eq__(self, other):
-        return self.__hash__() == other.__hash__() and self.value == other.value
+    def __eq__(self, other: "BinaryFieldElement") -> bool:
+        assert isinstance(other, BinaryFieldElement)
+        return self.field == other.field and self.value == other.value
 
-    def __add__(self, other):
+    def __add__(self, other: "BinaryFieldElement") -> "BinaryFieldElement":
         assert isinstance(other, BinaryFieldElement)
         field = self.field if self.field.is_extension_of(other.field) else other.field
         value = self.value ^ other.value
@@ -61,10 +111,10 @@ class BinaryFieldElement:
 
     __sub__ = __add__
 
-    def __neg__(self):
+    def __neg__(self) -> "BinaryFieldElement":
         return self
 
-    def __mul__(self, other):
+    def __mul__(self, other: "BinaryFieldElement") -> "BinaryFieldElement":
 
         # multiply using Karatsuba method
         def mul_equal_length(v1, v2, length):
@@ -85,33 +135,33 @@ class BinaryFieldElement:
             R1R2 = mul_equal_length(R1, R2, halflen)
             R1R2_high = mul_equal_length(1 << quarterlen, R1R2, halflen)
             Z3 = mul_equal_length(L1 ^ R1, L2 ^ R2, halflen)
-            return (
-                L1L2 ^
-                R1R2 ^
-                ((Z3 ^ L1L2 ^ R1R2 ^ R1R2_high) << halflen)
-            )
+            return L1L2 ^ R1R2 ^ ((Z3 ^ L1L2 ^ R1R2 ^ R1R2_high) << halflen)
 
         assert isinstance(other, BinaryFieldElement)
         if self.field.is_extension_of(other.field):
             unpacked = self.unpack_into(other.field)
-            return BinaryFieldElement.pack_from(
+            return self.field.from_unpacked(
                 [
-                    BinaryFieldElement(other.field, mul_equal_length(v.value, other.value, other.bit_length))
+                    BinaryFieldElement(
+                        other.field,
+                        mul_equal_length(v.value, other.value, other.bit_length),
+                    )
                     for v in unpacked
-                ],
-                self.field
+                ]
             )
         else:
             unpacked = other.unpack_into(self.field)
-            return BinaryFieldElement.pack_from(
+            return other.field.from_unpacked(
                 [
-                    BinaryFieldElement(self.field, mul_equal_length(v.value, self.value, self.bit_length))
+                    BinaryFieldElement(
+                        self.field,
+                        mul_equal_length(v.value, self.value, self.bit_length),
+                    )
                     for v in unpacked
-                ],
-                other.field
+                ]
             )
 
-    def __pow__(self, n):
+    def __pow__(self, n: int) -> "BinaryFieldElement":
         result = self.field.ONE
         base = self
         while n > 0:
@@ -121,72 +171,66 @@ class BinaryFieldElement:
             base = base * base
         return result
 
-    def inv(self):
+    def inv(self) -> "BinaryFieldElement":
         return self ** (self.field.order() - 1)
 
-    def __truediv__(self, other):
+    def __truediv__(self, other: "BinaryFieldElement") -> "BinaryFieldElement":
         assert isinstance(other, BinaryFieldElement)
         return self * other.inv()
 
     def __repr__(self):
-        return f'{self.value:#0{(self.bit_length >> 2) + 2}x}'
+        return f"{self.value:#0{(self.bit_length >> 2) + 2}x}"
 
-    def to_bytes(self, length, byteorder):
-        assert length >= (self.bit_length + 7) // 8
-        return self.value.to_bytes(length, byteorder)
-
-    @property
-    def bit_length(self):
-        return self.field.bit_length
-
-    def copy(self):
-        return BinaryFieldElement(self.field, self.value)
-
-    def unpack_into(self, subfield):
-        assert isinstance(subfield, BinaryField)
-        assert self.field.is_extension_of(subfield)
-        width = self.field.pack_width(subfield)
-        unpacked = [
-            (self.value >> (self.bit_length - subfield.bit_length * (i + 1))) & ((1 << subfield.bit_length) - 1)
-            for i in range(0, width)
-        ]
-        return tuple(BinaryFieldElement(subfield, v) for v in unpacked)
-
-    @staticmethod
-    def pack_from(elts, field):
-        assert isinstance(field, BinaryField)
-        assert all(isinstance(e, BinaryFieldElement) for e in elts)
-        assert len(set(e.field for e in elts)) == 1
-        assert elts[0].bit_length * len(elts) == field.bit_length
-        subfield_length = elts[0].bit_length
-        return BinaryFieldElement(
-            field,
-            sum(e.value << (field.bit_length - subfield_length * (i + 1)) for i, e in enumerate(elts))
+    def to_bytes(self) -> bytes:
+        return self.field.to_bytes() + self.value.to_bytes(
+            (self.bit_length + 7) // 8, "little"
         )
 
+    @property
+    def bit_length(self) -> int:
+        return self.field.bit_length
 
-BF1 = BinaryField(1, 0x1)
-BF2 = BinaryField(2, 0x2)
-BF4 = BinaryField(4, 0x5)
-BF8 = BinaryField(8, 0x2D)
-BF16 = BinaryField(16, 0xE2DE)
-BF32 = BinaryField(32, 0x03E21CEA)
-BF64 = BinaryField(64, 0x070F870DCD9C1D88)
-BF128 = BinaryField(128, 0x2E895399AF449ACE499596F6E5FCCAFA)
+    def copy(self) -> "BinaryFieldElement":
+        return BinaryFieldElement(self.field, self.value)
+
+    def to_extension_field(self, ext_field: "BinaryField") -> "BinaryFieldElement":
+        assert isinstance(ext_field, BinaryField)
+        assert ext_field.is_extension_of(self.field)
+        return BinaryFieldElement(ext_field, self.value)
+
+    def unpack_into(self, subfield: "BinaryField") -> tuple["BinaryFieldElement", ...]:
+        assert isinstance(subfield, BinaryField)
+        assert self.field.is_extension_of(subfield)
+        width = self.field.degree(subfield)
+        mask = (1 << subfield.bit_length) - 1
+        ret = []
+        x = self.value
+        for _ in range(width):
+            ret.append(BinaryFieldElement(subfield, x & mask))
+            x >>= subfield.bit_length
+        return tuple(ret[::-1])
 
 
-if __name__ == '__main__':
+BF1 = BinaryField(1)
+BF2 = BinaryField(2)
+BF4 = BinaryField(4)
+BF8 = BinaryField(8)
+BF16 = BinaryField(16)
+BF32 = BinaryField(32)
+BF64 = BinaryField(64)
+BF128 = BinaryField(128)
+
+
+if __name__ == "__main__":
     a, b, c = [BF128.random_element() for _ in range(3)]
     b = BF16.random_element()
     print(a)
     print(b)
     print(c)
-    print((a + b) * c)
-    print(a * c + b * c)
-    print((a / b) * b)
+    print((a + b) * c == a * c + b * c)
+    print((a / b) * b == a)
     print(BF128)
-    print(BF128.MULTIPLICATIVE_GENERATOR ** (BF128.order() // 17))
-    print(a ** (BF128.order() // 17))
-    print(a)
     print(BF128.order())
-    print(a * BF128(2))
+    print(a.unpack_into(BF32))
+    print(a == BinaryFieldElement.pack_from(a.unpack_into(BF16), BF128))
+    print(BF128 == BinaryField(128))

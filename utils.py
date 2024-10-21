@@ -1,27 +1,23 @@
-# eval multilinear polynomial at point
-# `evals` are the evaluations of multilinear polynomial over hypercube {0, 1}^k
-def multilinear_poly_eval(evals, point, field):
-    assert len(evals) == 2 ** len(point)
-    return _multilinear_poly_eval(evals, point, field)
-
-
-def _multilinear_poly_eval(evals, point, field):
-    if len(point) == 0:
-        return evals[0]
-    top = _multilinear_poly_eval(evals[:len(evals) // 2], point[:-1], field)
-    bottom = _multilinear_poly_eval(evals[len(evals) // 2:], point[:-1], field)
-    return (
-        (bottom - top) * point[-1] + top
-    )
-
-
-def evaluation_tensor_product(point, field):
+def tensor_product(coordinates, field):
     o = [field.ONE]
-    for coord in point:
+    for coord in coordinates:
         p0 = [(field.ONE - coord) * v for v in o]
         p1 = [c0 + v for c0, v in zip(p0, o)]
         o = p0 + p1
     return o
+
+
+def inner_product(xs, ys, field):
+    assert len(xs) == len(ys)
+    return sum((x * y for x, y in zip(xs, ys)), field.ZERO)
+
+
+def matrix_multiply_vector(mat, vec, field):
+    return [inner_product(row, vec, field) for row in mat]
+
+
+def vector_multiply_matrix(vec, mat, field):
+    return matrix_multiply_vector(transpose(mat), vec, field)
 
 
 def log2(x):
@@ -31,7 +27,4 @@ def log2(x):
 
 def transpose(mat):
     nrows, ncols = len(mat), len(mat[0])
-    return [
-        [mat[i][j] for i in range(nrows)]
-        for j in range(ncols)
-    ]
+    return [[mat[i][j] for i in range(nrows)] for j in range(ncols)]

@@ -1,39 +1,82 @@
+from binary_fields import BinaryFieldElement
+
 from hashlib import sha256
+from dataclasses import dataclass
 
 
-def hash(x):
-    return sha256(x).digest()
+class MerkleTreeVCS:
+
+    @dataclass
+    class Commitment:
+        merkle_root: bytes
+
+        def serialize(self) -> bytes:
+            return self.merkle_root
+
+    @dataclass
+    class Committed:
+        merkle_tree: list[bytes]
+
+    @dataclass
+    class Proof:
+        branch: list[bytes]
+
+    def __init__(self, log_len: int):
+        self.log_len = log_len
+
+    def _hash(self, vec: list[BinaryFieldElement]) -> bytes:
+        h = sha256()
+        for v in vec:
+            h.update(v.to_bytes())
+        return h.digest()
+
+    def _compress(self, x: bytes, y: bytes) -> bytes:
+        return sha256(x + y).digest()
+
+    def commit(
+        self, vecs: list[list[BinaryFieldElement]]
+    ) -> tuple[Commitment, Committed]:
+        assert len(vecs) == 1 << self.log_len
+        tree = [None] * len(vecs) + [self._hash(vec) for vec in vecs]
+        for i in range(len(vecs) - 1, 0, -1):
+            tree[i] = self._compress(tree[i << 1], tree[(i << 1) ^ 1])
+        commitment = MerkleTreeVCS.Commitment(tree[1])
+        committed = MerkleTreeVCS.Committed(tree)
+        return commitment, committed
+
+    def prove_opening(self, committed: Committed, index: int) -> Proof:
+        tree = committed.merkle_tree
+        offset_pos = int(index + len(tree) // 2)
+        branch = [tree[(offset_pos >> i) ^ 1] for i in range(self.log_len)]
+        return MerkleTreeVCS.Proof(branch)
+
+    def verify_opening(
+        self,
+        commitment: Commitment,
+        index: int,
+        proof: Proof,
+        values: list[BinaryFieldElement],
+    ) -> bool:
+        root = self._hash(values)
+        for b in proof.branch:
+            if index & 1:
+                root = self._compress(b, root)
+            else:
+                root = self._compress(root, b)
+            index >>= 1
+        return root == commitment.merkle_root
 
 
-# Build a Merkle tree from the inputs, where o[i] is the parent node of
-# o[2i] and o[2i+1], the second half of o is the original data, and o[1]
-# is the root
-def merklize(vals):
-    assert len(vals) & (len(vals) - 1) == 0
-    o = [None] * len(vals) + [hash(x) for x in vals]
-    for i in range(len(vals) - 1, 0, -1):
-        o[i] = hash(o[i << 1] + o[(i << 1) ^ 1])
-    return o
+if __name__ == "__main__":
 
+    from binary_fields import *
 
-def get_root(tree):
-    return tree[1]
+    log_len = 8
+    vcs = MerkleTreeVCS(log_len)
 
+    data = [[BF128.random_element() for _ in range(200)] for _ in range(1 << log_len)]
+    index = 123
 
-# Get a Merkle branch for the value at a particular position
-def get_branch(tree, pos):
-    offset_pos = int(pos + len(tree) // 2)
-    branch_length = len(tree).bit_length() - 2
-    return [tree[(offset_pos >> i) ^ 1] for i in range(branch_length)]
-
-
-# Verify that Merkle branch (requires only the root, not the tree)
-def verify_branch(root, pos, val, branch):
-    x = hash(val)
-    for b in branch:
-        if pos & 1:
-            x = hash(b + x)
-        else:
-            x = hash(x + b)
-        pos >>= 1
-    return x == root
+    commitment, committed = vcs.commit(data)
+    proof = vcs.prove_opening(committed, index)
+    assert vcs.verify_opening(commitment, index, proof, data[index])
