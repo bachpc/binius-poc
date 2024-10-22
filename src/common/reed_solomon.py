@@ -1,6 +1,6 @@
-from additive_ntt import AdditiveNTT
-from binary_fields import BinaryField, BinaryFieldElement
-from tower_algebra import TowerAlgebra
+from .additive_ntt import AdditiveNTT
+from .binary_fields import BinaryField, BinaryFieldElement
+from .tower_algebra import TowerAlgebra
 
 from copy import deepcopy
 

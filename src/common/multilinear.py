@@ -1,5 +1,5 @@
-from binary_fields import BinaryField, BinaryFieldElement
-from utils import log2, inner_product, vector_multiply_matrix, matrix_multiply_vector
+from .binary_fields import BinaryField, BinaryFieldElement
+from .utils import log2, inner_product, vector_multiply_matrix, matrix_multiply_vector
 
 
 class MultilinearQuery:
@@ -12,6 +12,12 @@ class MultilinearQuery:
 
     def __repr__(self) -> str:
         return f"MultilinearQuery(n_vars={self.n_vars}) in {self.field}"
+
+    def copy(self) -> "MultilinearQuery":
+        ret = MultilinearQuery(self.field)
+        ret.n_vars = self.n_vars
+        ret.expanded_query = self.expanded_query[:]
+        return ret
 
     @classmethod
     def with_full_query(
@@ -51,6 +57,9 @@ class MultilinearExtension:
     def __repr__(self) -> str:
         return f"MultilinearExtension(n_vars={self.n_vars}) in {self.field}"
 
+    def copy(self) -> "MultilinearExtension":
+        return MultilinearExtension(self.n_vars, self.evals[:], self.field)
+
     @classmethod
     def from_evals(
         cls, evals: list[BinaryFieldElement], field: BinaryField
@@ -85,3 +94,6 @@ class MultilinearExtension:
             mat, query.expansion(), query.field | self.field
         )
         return MultilinearExtension.from_evals(new_evals, query.field | self.field)
+
+    def evaluate_on_hypercube(self, index: int) -> BinaryFieldElement:
+        return self.evals[index]

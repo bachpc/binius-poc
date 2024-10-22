@@ -1,4 +1,6 @@
-from binary_fields import BinaryField, BinaryFieldElement
+from .binary_fields import BinaryField, BinaryFieldElement
+from .tower_algebra import TowerAlgebra
+
 from collections.abc import Iterable
 from hashlib import sha256
 
@@ -12,11 +14,13 @@ class Challenger:
     def _hash(self, x: bytes):
         return sha256(x).digest()
 
-    def observe(self, value: bytes | BinaryFieldElement):
+    def observe(self, value: bytes | BinaryFieldElement | TowerAlgebra):
         if isinstance(value, BinaryFieldElement):
             self.state = self._hash(self.state + b"1" + value.to_bytes())
         elif isinstance(value, bytes):
             self.state = self._hash(self.state + b"2" + value)
+        elif isinstance(value, TowerAlgebra):
+            self.observe_slice(value.elems[:])
         else:
             assert False
         self.counter = 0

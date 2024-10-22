@@ -1,6 +1,5 @@
 from collections.abc import Iterable
 import random
-from types import UnionType
 
 
 class BinaryField:

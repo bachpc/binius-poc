@@ -1,5 +1,5 @@
-from binary_fields import BinaryField, BinaryFieldElement
-from tower_algebra import TowerAlgebra
+from .binary_fields import BinaryField, BinaryFieldElement
+from .tower_algebra import TowerAlgebra
 
 
 class AdditiveNTT:

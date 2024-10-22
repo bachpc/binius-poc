@@ -1,4 +1,5 @@
-from binary_fields import BinaryFieldElement
+from .binary_fields import BinaryFieldElement
+from .base_pcs import BaseCommitment, BaseCommitted, BaseProof
 
 from hashlib import sha256
 from dataclasses import dataclass
@@ -7,18 +8,18 @@ from dataclasses import dataclass
 class MerkleTreeVCS:
 
     @dataclass
-    class Commitment:
+    class Commitment(BaseCommitment):
         merkle_root: bytes
 
         def serialize(self) -> bytes:
             return self.merkle_root
 
     @dataclass
-    class Committed:
+    class Committed(BaseCommitted):
         merkle_tree: list[bytes]
 
     @dataclass
-    class Proof:
+    class Proof(BaseProof):
         branch: list[bytes]
 
     def __init__(self, log_len: int):

@@ -1,76 +1,78 @@
-from binary_fields import BinaryField, BinaryFieldElement
-from tower_algebra import TowerAlgebra
-from multilinear import MultilinearExtension, MultilinearQuery
-from reed_solomon import ReedSolomonCode
-from merkle import MerkleTreeVCS
-from challenger import Challenger
-from utils import transpose, log2
+from common import (
+    BinaryField,
+    BinaryFieldElement,
+    MultilinearExtension,
+    MultilinearQuery,
+    ReedSolomonCode,
+    MerkleTreeVCS,
+    Challenger,
+    BaseCommitment,
+    BaseCommitted,
+    BaseProof,
+    BasePCS,
+    Vector,
+    Matrix,
+    transpose,
+    inner_product,
+)
 
 from dataclasses import dataclass
 
 
-class BiniusBlockPCS:
+class BiniusBasicPCS(BasePCS):
 
     @dataclass
-    class Commitment:
+    class Commitment(BaseCommitment):
         vcs_commitment: MerkleTreeVCS.Commitment
 
         def serialize(self) -> bytes:
             return self.vcs_commitment.serialize()
 
     @dataclass
-    class Committed:
+    class Committed(BaseCommitted):
         vcs_committed: MerkleTreeVCS.Committed
-        encoded_cols: list[list[BinaryFieldElement]]
+        encoded_cols: Matrix[BinaryFieldElement]
 
     @dataclass
-    class Proof:
+    class Proof(BaseProof):
         t_prime: MultilinearExtension
-        vcs_proofs: list[tuple[list[BinaryFieldElement], MerkleTreeVCS.Proof]]
+        vcs_proofs: list[tuple[Vector[BinaryFieldElement], MerkleTreeVCS.Proof]]
 
     def __init__(
         self,
-        F: BinaryField,
-        FA: BinaryField,
-        FE: BinaryField,
+        K: BinaryField,
+        L: BinaryField,
         n_vars: int,
         log_rows: int,
         log_inv_rate: int,
         n_challenges: int,
     ):
         assert (
-            isinstance(F, BinaryField)
-            and isinstance(FA, BinaryField)
-            and isinstance(FE, BinaryField)
-            and FA.is_extension_of(F)
-            and FE.is_extension_of(F)
+            isinstance(K, BinaryField)
+            and isinstance(L, BinaryField)
+            and L.is_extension_of(K)
         )
 
-        self.F = F
-        self.FA = FA
-        self.FE = FE
+        self.K = K
+        self.L = L
         self.n_vars = n_vars
         self.log_rows = log_rows
         self.n_challenges = n_challenges
 
-        self.FE_degree = self.FE.degree(self.F)
-        self.FA_degree = self.FA.degree(self.F)
+        self.L_degree = self.L.degree(self.K)
         self.log_cols = self.n_vars - self.log_rows
 
-        assert self.log_cols - log2(self.FA_degree) + log_inv_rate <= self.FA.bit_length
-        self.code = ReedSolomonCode(
-            self.log_cols - log2(self.FA_degree), log_inv_rate, self.FA
-        )
+        assert self.log_cols + log_inv_rate <= self.K.bit_length
+        self.code = ReedSolomonCode(self.log_cols, log_inv_rate, self.K)
         self.vcs = MerkleTreeVCS(self.code.log_length)
 
     def commit(self, poly: MultilinearExtension) -> tuple[Commitment, Committed]:
-        assert poly.field == self.F and poly.n_vars == self.n_vars
+        assert poly.field == self.K and poly.n_vars == self.n_vars
 
         row_length = 1 << self.log_cols
         evals = poly.evals
         mat = [evals[i : i + row_length] for i in range(0, len(evals), row_length)]
 
-        mat = [self.FA.cast_slice(row) for row in mat]
         encoded_mat = [self.code.encode(row) for row in mat]
 
         encoded_cols = transpose(encoded_mat)
@@ -88,11 +90,11 @@ class BiniusBlockPCS:
         poly: MultilinearExtension,
         query: list[BinaryFieldElement],
     ) -> Proof:
-        assert poly.field == self.F and poly.n_vars == self.n_vars == len(query)
-        assert all(self.FE.check_element(e) for e in query)
+        assert poly.field == self.K and poly.n_vars == self.n_vars == len(query)
+        assert all(self.L.check_element(e) for e in query)
 
         high_partial_query = MultilinearQuery.with_full_query(
-            query[self.log_cols :], self.FE
+            query[self.log_cols :], self.L
         )
         t_prime = poly.evaluate_partial_high(high_partial_query)
 
@@ -112,7 +114,7 @@ class BiniusBlockPCS:
         return proof
 
     def check_proof(self, proof: Proof) -> bool:
-        return proof.t_prime.field == self.FE and proof.t_prime.n_vars == self.log_cols
+        return proof.t_prime.field == self.L and proof.t_prime.n_vars == self.log_cols
 
     def verify_evaluation(
         self,
@@ -123,28 +125,13 @@ class BiniusBlockPCS:
         value: BinaryFieldElement,
     ) -> bool:
         assert len(query) == self.n_vars
-        assert all(self.FE.check_element(e) for e in query)
+        assert all(self.L.check_element(e) for e in query)
         assert self.check_proof(proof)
 
-        low_partial_query = MultilinearQuery.with_full_query(
-            query[: self.log_cols], self.FE
-        )
-        computed_value = proof.t_prime.evaluate(low_partial_query)
-        if computed_value != value:
-            return False
-
+        encoded_t_prime = self.code.encode(proof.t_prime.evals)
         high_partial_query = MultilinearQuery.with_full_query(
-            query[self.log_cols :], self.FE
+            query[self.log_cols :], self.L
         )
-
-        t_prime = proof.t_prime.evals
-        t_prime = [
-            TowerAlgebra(
-                self.F, self.FE, self.FA, t_prime[i : i + self.FA_degree]
-            ).transpose()
-            for i in range(0, len(t_prime), self.FA_degree)
-        ]
-        u_prime = self.code.encode(t_prime)
 
         challenger.observe_slice(proof.t_prime.evals)
         challenges = [
@@ -157,37 +144,37 @@ class BiniusBlockPCS:
             ):
                 return False
 
-            lhs = sum(
-                (
-                    TowerAlgebra.from_tensor(self.F, self.FA, self.FE, x, y)
-                    for x, y in zip(col, high_partial_query.expansion())
-                ),
-                TowerAlgebra.zero(self.F, self.FA, self.FE),
-            )
-
-            if lhs != u_prime[index]:
+            lhs = inner_product(high_partial_query.expansion(), col, self.L)
+            if lhs != encoded_t_prime[index]:
                 return False
+
+        low_partial_query = MultilinearQuery.with_full_query(
+            query[: self.log_cols], self.L
+        )
+        computed_value = proof.t_prime.evaluate(low_partial_query)
+        if computed_value != value:
+            return False
 
         return True
 
 
 if __name__ == "__main__":
-    from binary_fields import *
+    from common.binary_fields import *
     import random
     from copy import deepcopy
 
     random.seed(123)
 
-    F, FA, FE = BF8, BF32, BF128
-    n_vars, log_rows, log_inv_rate, n_challenges = 11, 3, 2, 64
+    K, L = BF8, BF128
+    n_vars, log_rows, log_inv_rate, n_challenges = 11, 5, 2, 64
 
-    pcs = BiniusBlockPCS(F, FA, FE, n_vars, log_rows, log_inv_rate, n_challenges)
+    pcs = BiniusBasicPCS(K, L, n_vars, log_rows, log_inv_rate, n_challenges)
     print(pcs.code)
     poly = MultilinearExtension.from_evals(
-        [F.random_element() for _ in range(1 << n_vars)], F
+        [K.random_element() for _ in range(1 << n_vars)], K
     )
-    query = [FE.random_element() for _ in range(n_vars)]
-    value = poly.evaluate(MultilinearQuery.with_full_query(query, FE))
+    query = [L.random_element() for _ in range(n_vars)]
+    value = poly.evaluate(MultilinearQuery.with_full_query(query, L))
 
     commitment, committed = pcs.commit(poly)
 

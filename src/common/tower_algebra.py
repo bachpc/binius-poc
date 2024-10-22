@@ -1,5 +1,5 @@
-from binary_fields import BinaryField, BinaryFieldElement
-from utils import transpose
+from .binary_fields import BinaryField, BinaryFieldElement
+from .utils import transpose
 
 
 class TowerAlgebra:
@@ -22,7 +22,8 @@ class TowerAlgebra:
         assert len(elems) <= self.n_rows
         assert all(F_vertical.check_element(e) for e in elems)
         if len(elems) < self.n_rows:
-            elems.extend([F_vertical(0) for _ in range(self.n_rows - len(elems))])
+            elems = [F_vertical(0) for _ in range(self.n_rows - len(elems))] + elems
+            # elems.extend([F_vertical(0) for _ in range(self.n_rows - len(elems))])
         self.elems = elems
 
     def __hash__(self) -> int:
@@ -119,8 +120,8 @@ class TowerAlgebra:
         return cls(F, F_vertical, F_horizontal, elems)
 
     def try_extract_vertical(self) -> BinaryFieldElement:
-        assert all(e == self.F_vertical.ZERO for e in self.elems[1:])
-        return self.elems[0]
+        assert all(e == self.F_vertical.ZERO for e in self.elems[:-1])
+        return self.elems[-1]
 
     def scale_vertical(self, scalar: BinaryFieldElement):
         assert self.F_vertical.check_element(scalar)
@@ -138,6 +139,11 @@ class TowerAlgebra:
         ]
         return TowerAlgebra(
             self.F, self.F_horizontal, self.F_vertical, horizontal_elems
+        )
+
+    def copy(self) -> "TowerAlgebra":
+        return TowerAlgebra(
+            self.F, self.F_vertical, self.F_horizontal, [e.copy() for e in self.elems]
         )
 
     def __add__(self, other: "TowerAlgebra") -> "TowerAlgebra":
